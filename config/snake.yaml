@@ -1,0 +1,10 @@
+name: snake
+
+channels:
+ - conda-forge
+ - bioconda
+ - nodefaults
+
+dependencies:
+ - snakemake
+ - pandas
