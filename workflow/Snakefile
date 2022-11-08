@@ -1,4 +1,103 @@
-# Main entrypoint of the workflow. 
-# Please follow the best practices: 
-# https://snakemake.readthedocs.io/en/stable/snakefiles/best_practices.html,
-# in particular regarding the standardized folder structure mentioned there. 
+#configfile: "config.yaml"
+import pandas as pd
+df = pd.DataFrame([['/raidixshare_logg01/jfaybishenko/github_repos/ngs-test-data/reads/a.chr21.1.fq','/raidixshare_logg01/jfaybishenko/github_repos/ngs-test-data/reads/a.chr21.2.fq'],['/raidixshare_logg01/jfaybishenko/github_repos/ngs-test-data/reads/b.chr21.1.fq','/raidixshare_logg01/jfaybishenko/github_repos/ngs-test-data/reads/b.chr21.2.fq']],
+    index = ['a.chr21','b.chr21'],
+    columns = ['path_1', 'path_2']
+)
+
+def get_pairs(wildcards):
+    row = df.loc[wildcards.base]
+    return (row['path_1'], row['path_2'])
+
+def get_fastqc_inputs_updated(wildcards):
+    if "val" in wildcards.reads: 
+        return "outputs/trim/{reads}.fq"
+    elif "1" in wildcards.reads[-1]:
+        id = wildcards.reads[:-2]
+        return (df.loc[id, 'path_1'])
+    else:
+        id = wildcards.reads[:-2]
+        return (df.loc[id, 'path_2'])
+
+def get_all_fastqc_outputs():
+    ret_list = list()
+    for i, row in df.iterrows():
+        fq_r1 = i + '.1'
+        fq_r2 = i + '.2'
+        fq_rt1 = i + '.1_val_1'
+        fq_rt2 = i + '.2_val_2'
+        ret_list = ret_list + [fq_r1, fq_r2, fq_rt1, fq_rt2]
+    return ret_list
+
+rule all: 
+    input:
+        "outputs/multi/multiqc_report.html"
+
+rule index:
+    input:
+        "/raidixshare_logg01/jfaybishenko/github_repos/ngs-test-data/ref/genome.chr21.fa" 
+    output: 
+        directory("outputs/index/chr21")
+    log:
+        "logs/index_chr21.log" 
+    conda: 
+        "enviroments/index.yaml"
+    shell:
+        "STAR --runMode genomeGenerate --genomeDir {output} --genomeFastaFiles {input[0]}  2> {log}"
+
+rule fastqc:
+    input:
+        get_fastqc_inputs_updated
+    output: 
+        "outputs/fastqc/{reads}_fastqc.html", "outputs/fastqc/{reads}_fastqc.zip"
+    log:
+        "logs/{reads}_fqc.log" 
+    conda: 
+        "enviroments/fastqc.yaml"
+    shell:
+        "fastqc {input} --outdir=$(dirname {output[0]}) 2> {log}"
+
+rule trim:
+    input:
+        #change this name to be more specific get_trim_input
+        get_pairs
+    output: 
+        "outputs/trim/{base}.1_val_1.fq", "outputs/trim/{base}.1.fq_trimming_report.txt",
+        "outputs/trim/{base}.2_val_2.fq", "outputs/trim/{base}.2.fq_trimming_report.txt"
+    log:
+        "logs/trim_{base}.log" 
+    conda: 
+        "enviroments/trim.yaml"
+    shell:
+        """
+        trim_galore --paired {input[0]} {input[1]} --output_dir $(dirname {output[0]}) 2> {log}
+        """
+        # TODO
+        #
+        # mv output to nicer name, adjust everything else 
+        
+
+rule align:
+    input:
+        rules.index.output, rules.trim.output[0], rules.trim.output[2], 
+        "/raidixshare_logg01/jfaybishenko/github_repos/ngs-test-data/ref/annotation.chr21.gtf"
+    output: 
+        multiext("outputs/align_{base}/", "Aligned.sortedByCoord.out.bam", "Log.final.out", "Log.out", "Log.progress.out", "SJ.out.tab")
+    log:
+        "logs/align_{base}.log"
+    conda: 
+        "enviroments/index.yaml"
+    shell:
+        "STAR --genomeDir {input[0]} --readFilesIn {input[1]} {input[2]} --sjdbGTFfile {input[3]}  --outSAMtype BAM SortedByCoordinate --outFileNamePrefix $(dirname {output[0]})/ 2> {log}"
+
+rule multiqc:
+    input: 
+        expand(rules.align.output, base=df.index), expand(rules.fastqc.output, reads=get_all_fastqc_outputs())
+    output:
+        "outputs/multi/multiqc_report.html", directory("outputs/multi/multiqc_data")
+    log:
+        "logs/multi.log"
+    conda:
+        "enviroments/multi.yaml"
+    shell: 
+        "multiqc . --outdir $(dirname {output[0]}) 2> {log}"

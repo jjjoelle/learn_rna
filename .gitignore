@@ -1,5 +1,6 @@
-results/**
+output/**
 resources/**
 logs/**
+trim/**
 .snakemake
 .snakemake/**
